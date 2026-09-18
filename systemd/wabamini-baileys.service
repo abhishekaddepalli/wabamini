@@ -1,0 +1,25 @@
+[Unit]
+Description=WabaMini Baileys WhatsApp Microservice Worker
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/www/apps/wabamini/baileys-worker
+Environment="NODE_ENV=production"
+Environment="HOST=127.0.0.1"
+Environment="PORT=3101"
+EnvironmentFile=-/www/apps/wabamini/baileys-worker/.env
+ExecStart=/usr/bin/node /www/apps/wabamini/baileys-worker/server.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wabamini-baileys
+
+# Resource limits
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=WabaMini Laravel Scheduler Run
+After=network.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/www/apps/wabamini/backend
+ExecStart=/usr/bin/php /www/apps/wabamini/backend/artisan schedule:run

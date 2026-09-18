@@ -1,0 +1,21 @@
+[Unit]
+Description=WabaMini Laravel Reverb WebSocket Server
+After=network.target mysql.service redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/www/apps/wabamini/backend
+ExecStart=/usr/bin/php /www/apps/wabamini/backend/artisan reverb:start --host=127.0.0.1 --port=8080
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wabamini-reverb
+
+# Resource limits
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -25,8 +25,8 @@ return [
     ],
 
     'baileys' => [
-        'worker_url' => env('BAILEYS_WORKER_URL', env('BAILEY_WORKER_URL', 'http://localhost:5001')),
-        'secret_token' => env('BAILEYS_SECRET_TOKEN', 'whatsomni_baileys_secret_key'),
+        'worker_url' => env('BAILEYS_WORKER_URL', env('BAILEY_WORKER_URL', 'http://127.0.0.1:3101')),
+        'secret_token' => env('BAILEYS_SECRET_TOKEN', env('INTERNAL_API_SECRET', 'whatsomni_baileys_secret_key')),
     ],
 
     'resend' => [

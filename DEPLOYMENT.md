@@ -1,406 +1,393 @@
-# 🚀 WabaMini - Complete Production VPS Deployment Runbook
+# 🚀 WabaMini - Ubuntu 24.04 LTS Production VPS Deployment Guide
 
-This guide provides an exhaustive, step-by-step walkthrough to deploy **WabaMini** onto any Linux Virtual Private Server (VPS) running **Ubuntu 22.04 LTS** or **Ubuntu 24.04 LTS**.
+This guide is the definitive production deployment manual for **WabaMini** on a standardized **Ubuntu 24.04 LTS** VPS architecture.
 
-Supported Cloud Providers: **DigitalOcean, Hetzner, AWS EC2, Linode, Vultr, Contabo, OVH**.
+---
+
+## 🏛️ Standardized Production Architecture
+
+- **Operating System**: Ubuntu 24.04 LTS (Noble Numbat)
+- **Target Hardware**: 8 vCPU, 16 GB RAM, 400 GB SSD
+- **Directory Layout**:
+  - Applications Root: `/www/apps/wabamini`
+  - Automated Backups: `/www/backups/wabamini`
+  - Deployment Automation: `/www/deploy`
+- **User & Group**: `www-data:www-data`
+- **Public Firewall Ports (UFW)**:
+  - `22123` → SSH (Hardened custom port)
+  - `80` → HTTP (ACME challenge & HTTPS redirect)
+  - `443` → HTTPS (Public SSL entry point)
+- **Internal Localhost Bindings (Never Publicly Exposed)**:
+  - `127.0.0.1:3100` → Next.js Frontend Server
+  - `127.0.0.1:3101` → Baileys WhatsApp Microservice Worker
+  - `127.0.0.1:8080` → Laravel Reverb WebSockets
+  - `127.0.0.1:3306` → MySQL 8.0 Database Server
+  - `127.0.0.1:6379` → Redis 7 In-Memory Store
+  - `/run/php/php8.3-fpm.sock` → PHP 8.3 FastCGI Unix Socket
+- **Process Management**: Native **systemd** (No Docker, No PM2, No aaPanel/Coolify)
 
 ---
 
 ## 📋 Table of Contents
-1. [Server Hardware & Prerequisites](#1-server-hardware--prerequisites)
-2. [Step 1: VPS Initial Hardening & System Setup](#step-1-vps-initial-hardening--system-setup)
-3. [Step 2: DNS & Domain Setup](#step-2-dns--domain-setup)
-4. [Step 3: Dockerized Deployment (Recommended)](#step-3-dockerized-deployment-recommended)
-5. [Step 4: SSL Certificate Setup via Certbot](#step-4-ssl-certificate-setup-via-certbot)
-6. [Step 5: Database Seeding & Verification](#step-5-database-seeding--verification)
-7. [Step 6: Native VPS Deployment (Nginx + Systemd + Supervisor)](#step-6-native-vps-deployment-alternative)
-8. [Step 7: Automated Backups & Maintenance](#step-7-automated-backups--maintenance)
-9. [Step 8: Zero-Downtime Update Script](#step-8-zero-downtime-update-script)
-10. [Troubleshooting & FAQs](#troubleshooting--faqs)
+1. [Prerequisites & Package Installation](#1-prerequisites--package-installation)
+2. [Firewall (UFW) & Security Setup](#2-firewall-ufw--security-setup)
+3. [Directory Layout & Base Structure](#3-directory-layout--base-structure)
+4. [Database & Redis Configuration](#4-database--redis-configuration)
+5. [Codebase Deployment & Permissions](#5-codebase-deployment--permissions)
+6. [Environment Configuration (.env Files)](#6-environment-configuration-env-files)
+7. [Dependencies Build & Setup](#7-dependencies-build--setup)
+8. [Systemd Service Setup](#8-systemd-service-setup)
+9. [Nginx Reverse Proxy & SSL Configuration](#9-nginx-reverse-proxy--ssl-configuration)
+10. [Database Migrations & Initial Seeding](#10-database-migrations--initial-seeding)
+11. [Scheduler & Cron Configuration](#11-scheduler--cron-configuration)
+12. [Deployment & Backup Scripts](#12-deployment--backup-scripts)
+13. [Verification & Health Checks](#13-verification--health-checks)
 
 ---
 
-## 1. Server Hardware & Prerequisites
+## 1. Prerequisites & Package Installation
 
-| Specification | Minimum (Staging / Small Business) | Recommended (Production / SaaS) |
-| :--- | :--- | :--- |
-| **vCPU** | 2 vCPUs | 4 vCPUs |
-| **RAM** | 4 GB | 8 GB |
-| **Swap** | 4 GB Swap | 4 GB Swap |
-| **Disk Space**| 40 GB NVMe / SSD | 80+ GB NVMe / SSD |
-| **Operating System** | Ubuntu 22.04 / 24.04 LTS | Ubuntu 22.04 / 24.04 LTS |
-
----
-
-## Step 1: VPS Initial Hardening & System Setup
-
-Connect to your VPS via SSH as root:
-```bash
-ssh root@YOUR_SERVER_IP
-```
-
-### 1.1 Update System Packages
-```bash
-apt update && apt upgrade -y
-apt install -y curl wget git ufw fail2ban unzip htop certbot python3-certbot-nginx
-```
-
-### 1.2 Create a Dedicated Deployer User
-```bash
-# Create user 'deploy'
-adduser --gecos "" deploy
-usermod -aG sudo deploy
-
-# Copy SSH keys to new user
-mkdir -p /home/deploy/.ssh
-cp /root/.ssh/authorized_keys /home/deploy/.ssh/
-chown -R deploy:deploy /home/deploy/.ssh
-chmod 700 /home/deploy/.ssh
-chmod 600 /home/deploy/.ssh/authorized_keys
-```
-
-### 1.3 Configure a 4GB Swap Space (Crucial for Memory Spikes)
-```bash
-fallocate -l 4G /swapfile
-chmod 600 /swapfile
-mkswap /swapfile
-swapon /swapfile
-echo '/swapfile none swap sw 0 0' >> /etc/fstab
-echo 'vm.swappiness=10' >> /etc/sysctl.conf
-sysctl -p
-```
-
-### 1.4 Configure UFW Firewall
-```bash
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp    # SSH
-ufw allow 80/tcp    # HTTP
-ufw allow 443/tcp   # HTTPS
-ufw --force enable
-ufw status verbose
-```
-
----
-
-## Step 2: DNS & Domain Setup
-
-Go to your Domain Registrar or DNS Manager (Cloudflare, Namecheap, GoDaddy) and add the following **A Records**:
-
-| Type | Host / Name | Value / Target | TTL |
-| :--- | :--- | :--- | :--- |
-| **A** | `app` | `YOUR_SERVER_IP` | 1 min / Auto |
-| **A** | `api` | `YOUR_SERVER_IP` | 1 min / Auto |
-
-*Note: If using Cloudflare, keep the proxy status **DNS only (grey cloud)** during initial SSL issuance.*
-
----
-
-## Step 3: Dockerized Deployment (Recommended)
-
-Switch to the `deploy` user:
-```bash
-su - deploy
-```
-
-### 3.1 Install Docker & Docker Compose
-```bash
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
-sudo usermod -aG docker $USER
-newgrp docker
-docker --version && docker compose version
-```
-
-### 3.2 Clone the WabaMini Repository
-```bash
-sudo mkdir -p /var/www/wabamini
-sudo chown -R deploy:deploy /var/www/wabamini
-git clone https://github.com/abhishekaddepalli/wabamini.git /var/www/wabamini
-cd /var/www/wabamini
-```
-
-### 3.3 Configure Environment Variables
-Generate secure credentials:
-```bash
-# Generate random 32-character secrets
-openssl rand -hex 16
-```
-
-Create `/var/www/wabamini/.env.production`:
-```bash
-cat << 'EOF' > /var/www/wabamini/.env.production
-# ==========================================
-# WabaMini Production Environment Configuration
-# ==========================================
-
-DOMAIN=yourdomain.com
-APP_NAME=WabaMini
-APP_ENV=production
-APP_DEBUG=false
-APP_URL=https://app.yourdomain.com
-API_URL=https://api.yourdomain.com
-
-# Database Credentials
-DB_DATABASE=whatsomni
-DB_USERNAME=whatsomni
-DB_PASSWORD=YOUR_STRONG_DB_PASSWORD_HERE
-DB_ROOT_PASSWORD=YOUR_STRONG_ROOT_PASSWORD_HERE
-
-# Redis
-REDIS_PASSWORD=YOUR_STRONG_REDIS_PASSWORD_HERE
-
-# Laravel Application Key (Run php artisan key:generate)
-APP_KEY=base64:YOUR_GENERATED_LARAVEL_KEY_HERE
-
-# Reverb WebSockets
-REVERB_APP_ID=wabamini_prod_id
-REVERB_APP_KEY=wabamini_prod_key
-REVERB_APP_SECRET=wabamini_prod_secret
-REVERB_HOST=api.yourdomain.com
-REVERB_PORT=443
-REVERB_SCHEME=https
-
-# Internal Worker Authentication
-INTERNAL_API_SECRET=YOUR_INTERNAL_SECRET_HERE
-EOF
-```
-
-Copy sub-service environments:
-```bash
-# Backend Environment
-cp backend/.env.example backend/.env
-# Frontend Environment
-cp frontend/.env.example frontend/.env.local
-# Worker Environment
-cp baileys-worker/.env.example baileys-worker/.env
-```
-
----
-
-## Step 4: SSL Certificate Setup via Certbot
-
-Before starting Nginx with SSL, obtain valid SSL certificates from Let's Encrypt:
+Update your Ubuntu 24.04 packages and install PHP 8.3, Node.js 20/22 LTS, Nginx, MySQL, Redis, and Certbot:
 
 ```bash
-# Stop any temporary web server
-sudo systemctl stop nginx 2>/dev/null || true
+# 1. Update OS package lists
+sudo apt update && sudo apt upgrade -y
 
-# Obtain certificates using Certbot standalone mode
-sudo certbot certonly --standalone \
-  -d app.yourdomain.com \
-  -d api.yourdomain.com \
-  --agree-tos \
-  -m your-email@yourdomain.com \
-  --non-interactive
-```
+# 2. Install base system utilities
+sudo apt install -y curl wget git unzip htop ufw fail2ban certbot python3-certbot-nginx logrotate net-tools
 
-The certificates will be generated in `/etc/letsencrypt/live/app.yourdomain.com/`.
-
----
-
-## Step 5: Build & Launch the Production Stack
-
-From `/var/www/wabamini`:
-
-```bash
-# Build and launch all containers in detached mode
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
-```
-
-Verify that all containers are healthy:
-```bash
-docker compose -f docker-compose.prod.yml ps
-```
-
-Expected containers:
-- `wabamini_mysql` (Healthy)
-- `wabamini_redis` (Healthy)
-- `wabamini_backend` (Up)
-- `wabamini_queue` (Up)
-- `wabamini_reverb` (Up)
-- `wabamini_scheduler` (Up)
-- `wabamini_baileys` (Up)
-- `wabamini_frontend` (Up)
-- `wabamini_nginx` (Up)
-
-### Run Database Migrations & Initial Setup
-```bash
-# Execute Laravel migrations
-docker exec -it wabamini_backend php artisan migrate --force
-
-# Seed default Super Admin credentials
-docker exec -it wabamini_backend php artisan db:seed --class=DatabaseSeeder --force
-
-# Create storage symlink
-docker exec -it wabamini_backend php artisan storage:link
-
-# Cache production config and routes
-docker exec -it wabamini_backend php artisan config:cache
-docker exec -it wabamini_backend php artisan route:cache
-docker exec -it wabamini_backend php artisan view:cache
-```
-
-Now access your production platform:
-- **Client & Admin Portal**: `https://app.yourdomain.com`
-- **Super Admin Sign In**: `https://app.yourdomain.com/superadmin/login`
-- **REST API Healthcheck**: `https://api.yourdomain.com/api/health`
-
----
-
-## Step 6: Native VPS Deployment (Alternative)
-
-If you prefer to run services natively without Docker containers:
-
-### 6.1 Install PHP 8.3 & Required Extensions
-```bash
-sudo add-apt-repository ppa:ondrej/php -y
-sudo apt update
+# 3. Install PHP 8.3 & Required Extensions
 sudo apt install -y php8.3-fpm php8.3-cli php8.3-mysql php8.3-curl php8.3-gd \
-  php8.3-mbstring php8.3-xml php8.3-zip php8.3-bcmath php8.3-intl php8.3-redis \
-  php8.3-opcache php8.3-pcntl php8.3-posix
-```
+    php8.3-mbstring php8.3-xml php8.3-zip php8.3-bcmath php8.3-soap \
+    php8.3-intl php8.3-readline php8.3-redis
 
-### 6.2 Install Node.js 20 & PM2
-```bash
+# 4. Install Composer
+curl -sS https://getcomposer.org/installer -o /tmp/composer-setup.php
+sudo php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer
+
+# 5. Install Node.js LTS (v20 or v22)
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
-sudo npm install -g pm2
+
+# 6. Install MySQL & Redis
+sudo apt install -y mysql-server redis-server nginx
+sudo systemctl enable --now mysql redis-server nginx php8.3-fpm
 ```
 
-### 6.3 Setup Supervisor for Queues & WebSockets
-Install supervisor:
+---
+
+## 2. Firewall (UFW) & Security Setup
+
+Ensure your SSH daemon is running on port **22123** before enabling UFW:
+
 ```bash
-sudo apt install -y supervisor
+# Allow only custom SSH, HTTP, and HTTPS
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 22123/tcp comment "SSH"
+sudo ufw allow 80/tcp comment "HTTP / ACME"
+sudo ufw allow 443/tcp comment "HTTPS"
+
+# Enable Firewall
+sudo ufw --force enable
+sudo ufw status verbose
 ```
 
-Create `/etc/supervisor/conf.d/wabamini.conf`:
+Verify that MySQL and Redis listen **only** on `127.0.0.1`:
+- `/etc/mysql/mysql.conf.d/mysqld.cnf` → `bind-address = 127.0.0.1`
+- `/etc/redis/redis.conf` → `bind 127.0.0.1 ::1`
+
+---
+
+## 3. Directory Layout & Base Structure
+
+Create the standardized `/www` directory structure owned by `www-data`:
+
+```bash
+sudo mkdir -p /www/apps/wabamini
+sudo mkdir -p /www/backups/wabamini
+sudo mkdir -p /www/deploy
+
+sudo chown -R www-data:www-data /www
+sudo chmod -R 755 /www
+```
+
+---
+
+## 4. Database & Redis Configuration
+
+Log in to MySQL as root and create the dedicated database and non-root user:
+
+```bash
+sudo mysql -u root
+```
+
+Execute the following SQL commands (replace `SECURE_PASSWORD_HERE` with a strong 32-character password):
+
+```sql
+CREATE DATABASE whatsomni CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'wabamini_user'@'127.0.0.1' IDENTIFIED BY 'SECURE_PASSWORD_HERE';
+GRANT ALL PRIVILEGES ON whatsomni.* TO 'wabamini_user'@'127.0.0.1';
+FLUSH PRIVILEGES;
+EXIT;
+```
+
+---
+
+## 5. Codebase Deployment & Permissions
+
+Clone the repository into `/www/apps/wabamini`:
+
+```bash
+cd /www/apps
+sudo -u www-data git clone https://github.com/abhishekaddepalli/wabamini.git wabamini
+cd /www/apps/wabamini
+```
+
+---
+
+## 6. Environment Configuration (.env Files)
+
+Copy and customize the `.env` files for each component:
+
+### 6.1 Backend (`/www/apps/wabamini/backend/.env`)
+```bash
+sudo -u www-data cp backend/.env.example backend/.env
+```
+Key settings to configure in `backend/.env`:
 ```ini
-[program:wabamini-queue]
-process_name=%(program_name)s_%(process_num)02d
-command=php /var/www/wabamini/backend/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
-autostart=true
-autorestart=true
-user=deploy
-numprocs=2
-redirect_stderr=true
-stdout_logfile=/var/www/wabamini/backend/storage/logs/queue.log
+APP_NAME=WabaMini
+APP_ENV=production
+APP_KEY=                      # Will be generated in Step 7
+APP_DEBUG=false
+APP_URL=https://yourdomain.com
+FRONTEND_URL=https://yourdomain.com
+SANCTUM_STATEFUL_DOMAINS=yourdomain.com
 
-[program:wabamini-reverb]
-command=php /var/www/wabamini/backend/artisan reverb:start --host=0.0.0.0 --port=8080
-autostart=true
-autorestart=true
-user=deploy
-redirect_stderr=true
-stdout_logfile=/var/www/wabamini/backend/storage/logs/reverb.log
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=whatsomni
+DB_USERNAME=wabamini_user
+DB_PASSWORD=SECURE_PASSWORD_HERE
+
+SESSION_DRIVER=redis
+QUEUE_CONNECTION=redis
+CACHE_STORE=redis
+REDIS_HOST=127.0.0.1
+
+REVERB_APP_ID=wabamini_app_id
+REVERB_APP_KEY=wabamini_reverb_key
+REVERB_APP_SECRET=generate_reverb_secret_32_chars
+REVERB_HOST="127.0.0.1"
+REVERB_PORT=8080
+REVERB_SCHEME=http
+
+VITE_REVERB_APP_KEY="${REVERB_APP_KEY}"
+VITE_REVERB_HOST="yourdomain.com"
+VITE_REVERB_PORT=443
+VITE_REVERB_SCHEME=https
+
+BAILEYS_WORKER_URL=http://127.0.0.1:3101
+BAILEYS_SECRET_TOKEN=generate_baileys_secret_32_chars
+INTERNAL_API_SECRET=generate_baileys_secret_32_chars
 ```
 
-Update supervisor:
+### 6.2 Frontend (`/www/apps/wabamini/frontend/.env`)
 ```bash
-sudo supervisorctl reread
-sudo supervisorctl update
-sudo supervisorctl start all
+sudo -u www-data cp frontend/.env.example frontend/.env
+```
+Key settings in `frontend/.env`:
+```ini
+PORT=3100
+HOST=127.0.0.1
+NODE_ENV=production
+NEXT_PUBLIC_BACKEND_URL=https://yourdomain.com
+
+NEXT_PUBLIC_REVERB_APP_KEY=wabamini_reverb_key
+NEXT_PUBLIC_REVERB_HOST=yourdomain.com
+NEXT_PUBLIC_REVERB_PORT=443
+NEXT_PUBLIC_REVERB_SCHEME=https
 ```
 
-### 6.4 Setup Cron for Laravel Scheduler
+### 6.3 Baileys Worker (`/www/apps/wabamini/baileys-worker/.env`)
 ```bash
-(crontab -l 2>/dev/null; echo "* * * * * cd /var/www/wabamini/backend && php artisan schedule:run >> /dev/null 2>&1") | crontab -
+sudo -u www-data cp baileys-worker/.env.example baileys-worker/.env
+```
+Key settings in `baileys-worker/.env`:
+```ini
+HOST=127.0.0.1
+PORT=3101
+LARAVEL_API_URL=https://yourdomain.com
+BAILEYS_SECRET_TOKEN=generate_baileys_secret_32_chars
+INTERNAL_API_SECRET=generate_baileys_secret_32_chars
 ```
 
 ---
 
-## Step 7: Automated Backups & Maintenance
+## 7. Dependencies Build & Setup
 
-Create an automated daily MySQL backup script at `/var/www/wabamini/scripts/backup.sh`:
+Run installation steps as `www-data`:
 
 ```bash
-mkdir -p /var/www/wabamini/scripts /var/backups/wabamini
-cat << 'EOF' > /var/www/wabamini/scripts/backup.sh
-#!/bin/bash
-BACKUP_DIR="/var/backups/wabamini"
-DATE=$(date +"%Y%m%d_%H%M%S")
-FILENAME="$BACKUP_DIR/wabamini_db_$DATE.sql.gz"
+# 1. Backend Dependencies & Keys
+cd /www/apps/wabamini/backend
+sudo -u www-data composer install --no-dev --optimize-autoloader
+sudo -u www-data php artisan key:generate --force
+sudo -u www-data php artisan storage:link
 
-mkdir -p $BACKUP_DIR
+# 2. Baileys Worker Dependencies
+cd /www/apps/wabamini/baileys-worker
+sudo -u www-data mkdir -p storage/sessions
+sudo -u www-data npm install --omit=dev
 
-# Dump and compress database from container
-docker exec wabamini_mysql mysqldump -uwhatsomni -pYOUR_STRONG_DB_PASSWORD_HERE whatsomni | gzip > $FILENAME
+# 3. Frontend Build
+cd /www/apps/wabamini/frontend
+sudo -u www-data npm install --omit=dev
+sudo -u www-data npm run build
 
-# Keep only the last 7 days of backups
-find $BACKUP_DIR -type f -name "*.sql.gz" -mtime +7 -exec rm {} \;
-
-echo "[$(date)] Backup completed successfully: $FILENAME"
-EOF
-
-chmod +x /var/www/wabamini/scripts/backup.sh
-```
-
-Add to cron to execute every midnight:
-```bash
-(crontab -l 2>/dev/null; echo "0 0 * * * /var/www/wabamini/scripts/backup.sh >> /var/log/wabamini_backup.log 2>&1") | crontab -
+# 4. Strict Permissions
+sudo chown -R www-data:www-data /www/apps/wabamini
+sudo chmod -R 755 /www/apps/wabamini
+sudo chmod -R 775 /www/apps/wabamini/backend/storage /www/apps/wabamini/backend/bootstrap/cache /www/apps/wabamini/baileys-worker/storage
 ```
 
 ---
 
-## Step 8: Zero-Downtime Update Script
+## 8. Systemd Service Setup
 
-Create a zero-downtime deployment script `/var/www/wabamini/deploy.sh`:
+The repository provides production unit templates in the `systemd/` directory:
 
 ```bash
-cat << 'EOF' > /var/www/wabamini/deploy.sh
-#!/bin/bash
-set -e
+# Copy systemd unit files to system folder
+sudo cp /www/apps/wabamini/systemd/wabamini-frontend.service /etc/systemd/system/
+sudo cp /www/apps/wabamini/systemd/wabamini-baileys.service /etc/systemd/system/
+sudo cp /www/apps/wabamini/systemd/wabamini-reverb.service /etc/systemd/system/
+sudo cp /www/apps/wabamini/systemd/wabamini-queue.service /etc/systemd/system/
+sudo cp /www/apps/wabamini/systemd/wabamini-scheduler.service /etc/systemd/system/
+sudo cp /www/apps/wabamini/systemd/wabamini-scheduler.timer /etc/systemd/system/
 
-echo "🚀 Starting WabaMini Deployment..."
-cd /var/www/wabamini
+# Reload systemd daemon
+sudo systemctl daemon-reload
 
-# 1. Fetch latest changes
-git pull origin main
-
-# 2. Rebuild and restart containers
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
-
-# 3. Run database migrations
-docker exec -t wabamini_backend php artisan migrate --force
-
-# 4. Clear and rebuild caches
-docker exec -t wabamini_backend php artisan optimize:clear
-docker exec -t wabamini_backend php artisan config:cache
-docker exec -t wabamini_backend php artisan route:cache
-docker exec -t wabamini_backend php artisan view:cache
-
-# 5. Restart queue workers
-docker exec -t wabamini_backend php artisan queue:restart
-
-echo "✅ WabaMini deployment completed successfully!"
-EOF
-
-chmod +x /var/www/wabamini/deploy.sh
+# Enable and start all services
+sudo systemctl enable --now wabamini-frontend
+sudo systemctl enable --now wabamini-baileys
+sudo systemctl enable --now wabamini-reverb
+sudo systemctl enable --now wabamini-queue
+sudo systemctl enable --now wabamini-scheduler.timer
 ```
 
-Now, future updates can be rolled out with a single command:
+Check statuses:
 ```bash
-./deploy.sh
+sudo systemctl status wabamini-frontend wabamini-baileys wabamini-reverb wabamini-queue wabamini-scheduler.timer
 ```
 
 ---
 
-## ❓ Troubleshooting & FAQs
+## 9. Nginx Reverse Proxy & SSL Configuration
 
-### 1. `502 Bad Gateway` on API or WebSockets
-- **Check Backend Logs**: `docker logs -f wabamini_backend`
-- **Check Nginx Configuration**: Verify upstream names in `/etc/nginx/conf.d/default.conf` match your service names.
+### 9.1 Acquire SSL with Certbot
+Before activating the full SSL block, obtain the Let's Encrypt certificate:
+```bash
+sudo certbot certonly --nginx -d yourdomain.com -d www.yourdomain.com
+```
 
-### 2. WhatsApp Baileys Worker QR Code not generating
-- **Check Worker Logs**: `docker logs -f wabamini_baileys`
-- **Verify Port**: Ensure port `5001` is open to internal docker network `wabamini_network`.
+### 9.2 Install WabaMini Nginx Configuration
+```bash
+# Copy the single-domain config template
+sudo cp /www/apps/wabamini/nginx/wabamini-single-domain.conf /etc/nginx/sites-available/wabamini.conf
 
-### 3. File Uploads failing (Max Size)
-- In Nginx configuration, verify `client_max_body_size 100M;`.
-- In `backend/docker/php.ini`, verify `upload_max_filesize = 64M` and `post_max_size = 64M`.
+# Replace placeholder domain with your actual domain
+sudo sed -i 's/yourdomain.com/YOUR_ACTUAL_DOMAIN/g' /etc/nginx/sites-available/wabamini.conf
+
+# Enable site and disable default
+sudo ln -sf /etc/nginx/sites-available/wabamini.conf /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# Test Nginx syntax and reload
+sudo nginx -t && sudo systemctl reload nginx
+```
 
 ---
 
-<div align="center">
-  <b>Need help deploying?</b> Open an issue on GitHub at <a href="https://github.com/abhishekaddepalli/wabamini">abhishekaddepalli/wabamini</a>.
-</div>
+## 10. Database Migrations & Initial Seeding
+
+Run database migrations and seed default Super Admin credentials:
+
+```bash
+cd /www/apps/wabamini/backend
+sudo -u www-data php artisan migrate --force
+sudo -u www-data php artisan db:seed --force
+```
+
+### Default Super Admin Credentials:
+- **URL**: `https://yourdomain.com/saas-admin`
+- **Email**: `admin@whatsomni.com`
+- **Password**: `Password123!`
+
+> [!CAUTION]
+> Log into the Super Admin panel immediately after deployment and update this password.
+
+---
+
+## 11. Scheduler & Cron Configuration
+
+Laravel's scheduler is managed either via the systemd timer installed in Step 8 (`wabamini-scheduler.timer`), or via cron:
+
+```bash
+# Cron alternative (if not using systemd timer):
+sudo -u www-data crontab -e
+```
+Add the following entry:
+```cron
+* * * * * cd /www/apps/wabamini/backend && php artisan schedule:run >> /dev/null 2>&1
+```
+
+---
+
+## 12. Deployment & Backup Scripts
+
+Copy automation scripts into `/www/deploy`:
+
+```bash
+sudo cp /www/apps/wabamini/scripts/deploy.sh /www/deploy/deploy-wabamini.sh
+sudo cp /www/apps/wabamini/scripts/backup.sh /www/deploy/backup-wabamini.sh
+sudo chmod +x /www/deploy/*.sh
+```
+
+### Automated Daily Backups
+Add to root crontab:
+```bash
+sudo crontab -e
+```
+Add daily backup at 2:00 AM:
+```cron
+0 2 * * * /www/deploy/backup-wabamini.sh >> /var/log/wabamini_backup.log 2>&1
+```
+
+---
+
+## 13. Verification & Health Checks
+
+Test all services directly on localhost:
+
+```bash
+# 1. Frontend Health Check
+curl -s http://127.0.0.1:3100/healthz
+
+# 2. Baileys Worker Health Check
+curl -s http://127.0.0.1:3101/health
+
+# 3. Backend Health Check
+curl -s https://yourdomain.com/up
+
+# 4. Reverb WebSocket Port
+nc -zv 127.0.0.1 8080
+
+# 5. Service logs
+sudo journalctl -u wabamini-frontend -n 20 --no-pager
+sudo journalctl -u wabamini-baileys -n 20 --no-pager
+sudo journalctl -u wabamini-reverb -n 20 --no-pager
+sudo journalctl -u wabamini-queue -n 20 --no-pager
+```

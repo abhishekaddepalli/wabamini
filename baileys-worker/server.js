@@ -21,8 +21,18 @@ const sessions = new Map();
 const lidToPhoneMap = new Map();
 const phoneToLidMap = new Map();
 
-const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://localhost:8000';
-const BAILEYS_SECRET_TOKEN = process.env.BAILEYS_SECRET_TOKEN || 'whatsomni_baileys_secret_key';
+const LARAVEL_API_URL = process.env.LARAVEL_API_URL || 'http://127.0.0.1:8000';
+const BAILEYS_SECRET_TOKEN = process.env.BAILEYS_SECRET_TOKEN || process.env.INTERNAL_API_SECRET || 'whatsomni_baileys_secret_key';
+
+// Minimal production-safe healthcheck endpoint (accessible internally via localhost)
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        service: 'baileys-worker',
+        active_sessions: sessions.size,
+        timestamp: new Date().toISOString()
+    });
+});
 
 // Authenticate all incoming HTTP control requests to Baileys microservice
 app.use((req, res, next) => {
@@ -430,8 +440,10 @@ async function recoverSessions() {
     }
 }
 
-const PORT = process.env.PORT || 5001;
-app.listen(PORT, () => {
-    console.log(`[Baileys Worker] Running on port ${PORT}`);
+const PORT = parseInt(process.env.PORT, 10) || 3101;
+const HOST = process.env.HOST || '127.0.0.1';
+
+app.listen(PORT, HOST, () => {
+    console.log(`[Baileys Worker] Running on http://${HOST}:${PORT}`);
     recoverSessions();
 });

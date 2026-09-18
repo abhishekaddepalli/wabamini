@@ -1,0 +1,25 @@
+[Unit]
+Description=WabaMini Next.js Frontend Production Server
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/www/apps/wabamini/frontend
+Environment="NODE_ENV=production"
+Environment="PORT=3100"
+Environment="HOSTNAME=127.0.0.1"
+EnvironmentFile=-/www/apps/wabamini/frontend/.env
+ExecStart=/usr/bin/node /www/apps/wabamini/frontend/node_modules/next/dist/bin/next start -p 3100 -H 127.0.0.1
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wabamini-frontend
+
+# Resource limits and process isolation
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

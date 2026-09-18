@@ -92,10 +92,11 @@ export default function middleware(request: NextRequest) {
 
 export const config = {
   // Match all pathnames except for the ones starting with:
+  // - healthz (Internal healthcheck endpoint)
   // - api (API routes)
   // - sanctum ( Sanctum CSRF / session endpoint)
   // - broadcasting ( Laravel Reverb authentication endpoint)
   // - _next (Next.js internal files)
   // - static files with extensions (e.g. logo.svg, favicon.ico)
-  matcher: ['/((?!api|sanctum|broadcasting|_next|.*\\..*).*)']
+  matcher: ['/((?!healthz|api|sanctum|broadcasting|_next|.*\\..*).*)']
 };

@@ -1,0 +1,21 @@
+[Unit]
+Description=WabaMini Laravel Queue Worker
+After=network.target mysql.service redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/www/apps/wabamini/backend
+ExecStart=/usr/bin/php /www/apps/wabamini/backend/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wabamini-queue
+
+# Resource limits
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

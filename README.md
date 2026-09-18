@@ -138,28 +138,17 @@ Password: Password123!
 
 ---
 
-## 🌐 Production VPS Deployment
+## 🌐 Production VPS Deployment (Ubuntu 24.04 Native Stack)
 
-Deploying **WabaMini** to any Cloud VPS (Ubuntu 22.04 or 24.04 on DigitalOcean, Hetzner, AWS EC2, Linode, Contabo) is straightforward with our production Docker stack.
+Deploying **WabaMini** to any Cloud VPS (DigitalOcean, Hetzner, AWS EC2, Linode, Contabo) is fully optimized for a native high-performance stack (**Nginx + PHP 8.3-FPM + Node.js + Systemd + MySQL + Redis**).
 
 👉 **[Read the Full Step-by-Step VPS Production Guide (DEPLOYMENT.md)](DEPLOYMENT.md)**
 
-### Quick VPS Summary
-1. **Provision VPS**: Ubuntu 22.04 LTS (minimum 2 vCPU, 4GB RAM + 4GB Swap).
-2. **DNS Setup**: Point `app.yourdomain.com` and `api.yourdomain.com` to your VPS IP.
-3. **Install Docker**: `curl -fsSL https://get.docker.com | sh`
-4. **Deploy Stack**:
-   ```bash
-   git clone https://github.com/abhishekaddepalli/wabamini.git /var/www/wabamini
-   cd /var/www/wabamini
-   cp .env.example .env.production
-   # Update domain and secure credentials in .env.production
-   docker compose -f docker-compose.prod.yml up -d --build
-   ```
-5. **Issue SSL Certificate**:
-   ```bash
-   sudo certbot certonly --webroot -w /var/www/certbot -d app.yourdomain.com -d api.yourdomain.com
-   ```
+### Architecture Highlights:
+1. **Directory Standard**: Rooted cleanly under `/www/apps/wabamini`, with automated backups in `/www/backups/wabamini` and deployment tooling in `/www/deploy`.
+2. **Process Management**: Native **systemd** services for Next.js frontend (`wabamini-frontend.service`), Baileys WhatsApp worker (`wabamini-baileys.service`), Laravel Reverb WebSockets (`wabamini-reverb.service`), and Queue Workers (`wabamini-queue.service`).
+3. **Hardened Firewall**: Custom SSH on port `22123`, public HTTP (`80`) and HTTPS (`443`) only. All databases and internal Node ports listen strictly on `127.0.0.1`.
+4. **SSL & Reverse Proxy**: Unified Nginx reverse proxy with automated Let's Encrypt SSL via Certbot.
 
 ---
 
